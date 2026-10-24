@@ -71,8 +71,7 @@ export const register = async (req: Request, res: Response) => {
  */
 export const login = async (req: Request, res: Response) => {
   const { email, password } = req.body;
-  console.log(req.body);
-
+  
   if (!email || !password) {
     res.status(400).json({ success: false, message: "All fields required" });
     return;
@@ -122,6 +121,52 @@ export const login = async (req: Request, res: Response) => {
     });
 
     res.status(200).json({ success: true, user: safeUser });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+/**
+ * To logout a user, we need to clear the JWT token from the cookies.
+ * route: POST /api/auth/logout
+ * description: This endpoint will clear the JWT token from the cookies, effectively logging out the user. 
+ */
+
+export const logout = (_req: Request, res: Response) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+  });
+  res.status(200).json({ success: true, message: "Logged out" });
+};
+
+
+/**
+ * To get the details of the currently authenticated user, we need to verify the JWT token and fetch the user details from the database.
+ * route: GET /api/auth/me
+ * description: This endpoint will return the details of the currently authenticated user. The user must be authenticated to access this endpoint.
+ */
+
+export const me = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      omit: { passwordHash: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ success: false, message: "User not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, user });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Something went wrong" });
