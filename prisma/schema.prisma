@@ -34,7 +34,9 @@ model Organization {
   createdAt   DateTime           @default(now()) @map("created_at")
   updatedAt   DateTime           @updatedAt @map("updated_at")
 
-  users User[]
+  users       User[]
+  teams       Team[]
+  invitations Invitation[]
 
   @@map("organizations")
 }
@@ -53,6 +55,9 @@ model User {
   organization Organization @relation(fields: [organizationId], references: [id])
 
   passwordResetTokens PasswordResetToken[]
+  ledTeams            Team[]
+  teamMemberships     TeamMember[]
+  sentInvitations     Invitation[]
 
   @@index([organizationId])
   @@map("users")
@@ -70,4 +75,78 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+enum TeamStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model Team {
+  id             String     @id @default(uuid())
+  organizationId String     @map("organization_id")
+  name           String
+  description    String?    @db.Text
+  teamLeaderId   String?    @map("team_leader_id")
+  status         TeamStatus @default(ACTIVE)
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  teamLeader   User?        @relation(fields: [teamLeaderId], references: [id])
+  members      TeamMember[]
+  invitations  Invitation[]
+
+  @@index([organizationId])
+  @@index([teamLeaderId])
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String           @id @default(uuid())
+  teamId   String           @map("team_id")
+  userId   String           @map("user_id")
+  joinedAt DateTime         @default(now()) @map("joined_at")
+  status   MembershipStatus @default(ACTIVE)
+
+  team Team @relation(fields: [teamId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+model Invitation {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  teamId         String?          @map("team_id")
+  email          String
+  invitedById    String           @map("invited_by_id")
+  intendedRole   Role             @map("intended_role")
+  tokenHash      String           @unique @map("token_hash")
+  expiresAt      DateTime         @map("expires_at")
+  acceptedAt     DateTime?        @map("accepted_at")
+  status         InvitationStatus @default(PENDING)
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  team         Team?        @relation(fields: [teamId], references: [id])
+  invitedBy    User         @relation(fields: [invitedById], references: [id])
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("invitations")
 }
