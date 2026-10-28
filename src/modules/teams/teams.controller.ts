@@ -268,3 +268,40 @@ export const setTeamLeader = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+export const removeMember = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const teamId = req.params.id as string;
+  const memberId = req.params.userId as string;
+
+  try {
+    const team = await prisma.team.findFirst({
+      where: { id: teamId, organizationId },
+    });
+
+    if (!team || (role === "TEAM_LEADER" && team.teamLeaderId !== userId)) {
+      res.status(404).json({ success: false, message: "Team not found" });
+      return;
+    }
+
+    const result = await prisma.teamMember.updateMany({
+      where: { teamId, userId: memberId, status: "ACTIVE" },
+      data: { status: "INACTIVE" },
+    });
+
+    if (result.count === 0) {
+      res.status(404).json({ success: false, message: "Member not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: "Member removed from team" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};

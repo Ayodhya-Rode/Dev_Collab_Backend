@@ -384,3 +384,71 @@ export const acceptInvitation = async (req: Request, res: Response) => {
     handleAcceptError(err, res);
   }
 };
+
+export const listInvitations = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+
+  try {
+    const invitations = await prisma.invitation.findMany({
+      where: {
+        organizationId,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+        ...(role === "TEAM_LEADER" ? { team: { teamLeaderId: userId } } : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        intendedRole: true,
+        status: true,
+        expiresAt: true,
+        createdAt: true,
+        team: { select: { id: true, name: true } },
+        invitedBy: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.status(200).json({ success: true, invitations });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+export const revokeInvitation = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const id = req.params.id as string;
+
+  try {
+    const result = await prisma.invitation.updateMany({
+      where: {
+        id,
+        organizationId,
+        status: "PENDING",
+        ...(role === "TEAM_LEADER" ? { team: { teamLeaderId: userId } } : {}),
+      },
+      data: { status: "REVOKED" },
+    });
+
+    if (result.count === 0) {
+      res.status(404).json({ success: false, message: "Pending invitation not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: "Invitation revoked" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
