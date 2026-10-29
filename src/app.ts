@@ -7,6 +7,12 @@ import authRoutes from "./modules/auth/auth.routes.js";
 import cookieParser from "cookie-parser";
 import teamsRoutes from "./modules/teams/teams.routes.js";
 import invitationRoutes from "./modules/invitations/invitations.routes.js";
+import projectRoutes from "./modules/projects/projects.routes.js";
+
+
+
+
+
 
 export const app = express();
 
@@ -18,7 +24,7 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/teams", teamsRoutes);
 app.use("/api/invitations", invitationRoutes);
-
+app.use("/api/projects", projectRoutes);
 
 
 app.get("/api/health", async (_req, res) => {

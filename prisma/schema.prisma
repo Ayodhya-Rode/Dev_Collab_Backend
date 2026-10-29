@@ -37,6 +37,7 @@ model Organization {
   users       User[]
   teams       Team[]
   invitations Invitation[]
+  projects    Project[]
 
   @@map("organizations")
 }
@@ -58,6 +59,8 @@ model User {
   ledTeams            Team[]
   teamMemberships     TeamMember[]
   sentInvitations     Invitation[]
+  ledProjects         Project[]            @relation("ProjectLead")
+  createdProjects     Project[]            @relation("ProjectCreator")
 
   @@index([organizationId])
   @@map("users")
@@ -104,10 +107,11 @@ model Team {
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  teamLeader   User?        @relation(fields: [teamLeaderId], references: [id])
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  teamLeader   User?         @relation(fields: [teamLeaderId], references: [id])
   members      TeamMember[]
   invitations  Invitation[]
+  projects     ProjectTeam[]
 
   @@index([organizationId])
   @@index([teamLeaderId])
@@ -149,4 +153,57 @@ model Invitation {
   @@index([organizationId])
   @@index([email])
   @@map("invitations")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  INACTIVE
+  ON_HOLD
+  COMPLETED
+  PLANNING
+  ARCHIVED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Project {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  name           String
+  description    String?       @db.Text
+  status         ProjectStatus @default(PLANNING)
+  priority       Priority      @default(MEDIUM)
+  startDate      DateTime?     @map("start_date") @db.Date
+  dueDate        DateTime?     @map("due_date") @db.Date
+  teamLeaderId   String        @map("team_leader_id")
+  createdById    String        @map("created_by")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  teamLeader   User          @relation("ProjectLead", fields: [teamLeaderId], references: [id])
+  createdBy    User          @relation("ProjectCreator", fields: [createdById], references: [id])
+  teams        ProjectTeam[]
+
+  @@index([organizationId])
+  @@index([teamLeaderId])
+  @@map("projects")
+}
+
+model ProjectTeam {
+  id        String   @id @default(uuid())
+  projectId String   @map("project_id")
+  teamId    String   @map("team_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+  team    Team    @relation(fields: [teamId], references: [id])
+
+  @@unique([projectId, teamId])
+  @@index([teamId])
+  @@map("project_teams")
 }
