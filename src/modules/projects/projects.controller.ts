@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { prisma } from "../../lib/prisma.js";
-import type { Priority } from "../../generated/prisma/client.js";
+import type { Priority,Prisma, ProjectStatus } from "../../generated/prisma/client.js";
 
 const PRIORITIES: Priority[] = ["LOW", "MEDIUM", "HIGH"];
 
@@ -15,6 +15,65 @@ const projectInclude = {
   teamLeader: { select: { id: true, name: true, email: true } },
   teams: { select: { team: { select: { id: true, name: true } } } },
 } as const;
+
+type AuthUser = NonNullable<Request["user"]>;
+
+const STATUSES: ProjectStatus[] = [
+  "PLANNING",
+  "ACTIVE",
+  "ON_HOLD",
+  "COMPLETED",
+  "ARCHIVED",
+];
+
+const visibleWhere = ({ userId, role, organizationId }: AuthUser): Prisma.ProjectWhereInput => {
+  if (role === "ADMIN") return { organizationId };
+
+  if (role === "TEAM_LEADER") {
+    return {
+      organizationId,
+      OR: [
+        { teamLeaderId: userId },
+        { teams: { some: { team: { teamLeaderId: userId } } } },
+      ],
+    };
+  }
+
+  return {
+    organizationId,
+    teams: {
+      some: { team: { members: { some: { userId, status: "ACTIVE" } } } },
+    },
+  };
+};
+
+const checkLeadAndTeams = async (
+  organizationId: string,
+  leaderId: string,
+  teamIds: string[],
+): Promise<string | null> => {
+  const teams = await prisma.team.findMany({
+    where: { id: { in: teamIds }, organizationId, status: "ACTIVE" },
+    select: { id: true, teamLeaderId: true },
+  });
+
+  if (teams.length !== teamIds.length) return "One or more teams were not found";
+
+  const leader = await prisma.user.findFirst({
+    where: { id: leaderId, organizationId, role: "TEAM_LEADER", status: "ACTIVE" },
+  });
+
+  if (!leader) return "Project lead must be an active Team Leader of your organization";
+
+  if (!teams.some((t) => t.teamLeaderId === leader.id)) {
+    return "The project lead must be the Team Leader of one of the linked teams";
+  }
+
+  return null;
+};8
+
+
+
 
 export const createProject = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -133,38 +192,315 @@ export const listProjects = async (req: Request, res: Response) => {
     return;
   }
 
-  const { userId, role, organizationId } = req.user;
-
   try {
-    const where =
-      role === "ADMIN"
-        ? { organizationId }
-        : role === "TEAM_LEADER"
-          ? {
-              organizationId,
-              OR: [
-                { teamLeaderId: userId },
-                { teams: { some: { team: { teamLeaderId: userId } } } },
-              ],
-            }
-          : {
-              organizationId,
-              teams: {
-                some: {
-                  team: {
-                    members: { some: { userId, status: "ACTIVE" as const } },
-                  },
-                },
-              },
-            };
-
     const projects = await prisma.project.findMany({
-      where,
+      where: visibleWhere(req.user),
       include: projectInclude,
       orderBy: { createdAt: "desc" },
     });
 
     res.status(200).json({ success: true, projects });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+
+export const getProject = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const id = req.params.id as string;
+
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id, ...visibleWhere(req.user) },
+      include: {
+        teamLeader: { select: { id: true, name: true, email: true } },
+        createdBy: { select: { id: true, name: true } },
+        teams: {
+          select: {
+            team: {
+              select: {
+                id: true,
+                name: true,
+                teamLeader: { select: { id: true, name: true } },
+                _count: { select: { members: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    const canManage =
+      req.user.role === "ADMIN" || project.teamLeaderId === req.user.userId;
+
+    res.status(200).json({ success: true, project, canManage });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+
+export const updateProject = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const id = req.params.id as string;
+  const { name, description, status, priority, startDate, dueDate } = req.body;
+
+  const data: Prisma.ProjectUpdateInput = {};
+
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim()) {
+      res.status(400).json({ success: false, message: "Project name cannot be empty" });
+      return;
+    }
+    data.name = name.trim();
+  }
+
+  if (description !== undefined) {
+    if (description !== null && typeof description !== "string") {
+      res.status(400).json({ success: false, message: "Invalid description" });
+      return;
+    }
+    data.description = description?.trim() || null;
+  }
+
+  if (status !== undefined) {
+    if (!STATUSES.includes(status)) {
+      res.status(400).json({
+        success: false,
+        message: "Status must be PLANNING, ACTIVE, ON_HOLD, COMPLETED or ARCHIVED",
+      });
+      return;
+    }
+    if (status === "ARCHIVED" && role !== "ADMIN") {
+      res.status(403).json({ success: false, message: "Only an Admin can archive a project" });
+      return;
+    }
+    data.status = status;
+  }
+
+  if (priority !== undefined) {
+    if (!PRIORITIES.includes(priority)) {
+      res.status(400).json({ success: false, message: "Priority must be LOW, MEDIUM or HIGH" });
+      return;
+    }
+    data.priority = priority;
+  }
+
+  if (startDate !== undefined) {
+    if (!hasValue(startDate)) {
+      data.startDate = null;
+    } else if (isDateString(startDate)) {
+      data.startDate = new Date(startDate);
+    } else {
+      res.status(400).json({ success: false, message: "Start date must be YYYY-MM-DD" });
+      return;
+    }
+  }
+
+  if (dueDate !== undefined) {
+    if (!hasValue(dueDate)) {
+      data.dueDate = null;
+    } else if (isDateString(dueDate)) {
+      data.dueDate = new Date(dueDate);
+    } else {
+      res.status(400).json({ success: false, message: "Due date must be YYYY-MM-DD" });
+      return;
+    }
+  }
+
+  if (Object.keys(data).length === 0) {
+    res.status(400).json({ success: false, message: "Nothing to update" });
+    return;
+  }
+
+  try {
+    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+
+    if (!project || (role !== "ADMIN" && project.teamLeaderId !== userId)) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    if (project.status === "ARCHIVED" && role !== "ADMIN") {
+      res.status(403).json({
+        success: false,
+        message: "Archived projects can only be changed by an Admin",
+      });
+      return;
+    }
+
+    const effectiveStart =
+      data.startDate !== undefined ? (data.startDate as Date | null) : project.startDate;
+    const effectiveDue =
+      data.dueDate !== undefined ? (data.dueDate as Date | null) : project.dueDate;
+
+    if (effectiveStart && effectiveDue && effectiveDue < effectiveStart) {
+      res.status(400).json({
+        success: false,
+        message: "Due date cannot be before the start date",
+      });
+      return;
+    }
+
+    const updated = await prisma.project.update({
+      where: { id },
+      data,
+      include: projectInclude,
+    });
+
+    res.status(200).json({ success: true, project: updated });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+
+export const setProjectLeader = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { organizationId } = req.user;
+  const id = req.params.id as string;
+  const { teamLeaderId } = req.body;
+
+  if (typeof teamLeaderId !== "string" || !teamLeaderId) {
+    res.status(400).json({ success: false, message: "teamLeaderId is required" });
+    return;
+  }
+
+  try {
+    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+
+    if (!project) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    const leader = await prisma.user.findFirst({
+      where: { id: teamLeaderId, organizationId, role: "TEAM_LEADER", status: "ACTIVE" },
+    });
+
+    if (!leader) {
+      res.status(400).json({
+        success: false,
+        message: "Project lead must be an active Team Leader of your organization",
+      });
+      return;
+    }
+
+    const leadsLinkedTeam = await prisma.projectTeam.findFirst({
+      where: { projectId: id, team: { teamLeaderId: leader.id } },
+    });
+
+    if (!leadsLinkedTeam) {
+      res.status(400).json({
+        success: false,
+        message: "The project lead must be the Team Leader of one of the linked teams",
+      });
+      return;
+    }
+
+    const updated = await prisma.project.update({
+      where: { id },
+      data: { teamLeaderId: leader.id },
+      include: projectInclude,
+    });
+
+    res.status(200).json({ success: true, project: updated });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+
+export const setProjectTeams = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const id = req.params.id as string;
+  const { teamIds, teamLeaderId } = req.body;
+
+  if (
+    !Array.isArray(teamIds) ||
+    teamIds.length === 0 ||
+    !teamIds.every((t) => typeof t === "string")
+  ) {
+    res.status(400).json({ success: false, message: "Select at least one team" });
+    return;
+  }
+
+  const uniqueTeamIds = [...new Set(teamIds as string[])];
+
+  try {
+    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+
+    if (!project || (role !== "ADMIN" && project.teamLeaderId !== userId)) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    if (project.status === "ARCHIVED" && role !== "ADMIN") {
+      res.status(403).json({
+        success: false,
+        message: "Archived projects can only be changed by an Admin",
+      });
+      return;
+    }
+
+    // Only the Admin can change the lead at the same time
+    const leaderId =
+      role === "ADMIN" && typeof teamLeaderId === "string" && teamLeaderId
+        ? teamLeaderId
+        : project.teamLeaderId;
+
+    const problem = await checkLeadAndTeams(organizationId, leaderId, uniqueTeamIds);
+
+    if (problem) {
+      res.status(400).json({ success: false, message: problem });
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.projectTeam.deleteMany({
+        where: { projectId: id, teamId: { notIn: uniqueTeamIds } },
+      }),
+      prisma.projectTeam.createMany({
+        data: uniqueTeamIds.map((teamId) => ({ projectId: id, teamId })),
+        skipDuplicates: true,
+      }),
+      prisma.project.update({ where: { id }, data: { teamLeaderId: leaderId } }),
+    ]);
+
+    const updated = await prisma.project.findUnique({
+      where: { id },
+      include: projectInclude,
+    });
+
+    res.status(200).json({ success: true, project: updated });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Something went wrong" });
