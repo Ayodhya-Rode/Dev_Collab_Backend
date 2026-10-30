@@ -13,6 +13,7 @@ const isDateString = (v: unknown): v is string =>
 
 const projectInclude = {
   teamLeader: { select: { id: true, name: true, email: true } },
+  createdBy: { select: { id: true, name: true } },
   teams: { select: { team: { select: { id: true, name: true } } } },
 } as const;
 
