@@ -7,7 +7,7 @@ import { prisma } from "../../lib/prisma.js";
  * @route POST /api/teams
  * @description Create a new team within the organization. Only users with the "ADMIN" role can create teams. The request body should include the team name, an optional description, and an optional team leader ID. If a team leader ID is provided, it must correspond to an active user with the "TEAM_LEADER" role within the same organization.
  * @access Private (ADMIN only)
- * @param {string} name - The name of the team (required). 
+ * @param {string} name - The name of the team (required).
  */
 export const createTeam = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -36,7 +36,8 @@ export const createTeam = async (req: Request, res: Response) => {
       if (!leader) {
         res.status(400).json({
           success: false,
-          message: "Team leader must be an active Team Leader of your organization",
+          message:
+            "Team leader must be an active Team Leader of your organization",
         });
         return;
       }
@@ -57,7 +58,6 @@ export const createTeam = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
-
 
 /**
  * TO List all teams
@@ -100,7 +100,6 @@ export const listTeams = async (req: Request, res: Response) => {
   }
 };
 
-
 export const getTeam = async (req: Request, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, message: "Not authenticated" });
@@ -129,7 +128,8 @@ export const getTeam = async (req: Request, res: Response) => {
       team &&
       (role === "ADMIN" ||
         (role === "TEAM_LEADER" && team.teamLeaderId === userId) ||
-        (role === "DEVELOPER" && team.members.some((m) => m.user.id === userId)));
+        (role === "DEVELOPER" &&
+          team.members.some((m) => m.user.id === userId)));
 
     if (!team || !canView) {
       res.status(404).json({ success: false, message: "Team not found" });
@@ -142,7 +142,6 @@ export const getTeam = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
-
 
 export const updateTeam = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -162,7 +161,9 @@ export const updateTeam = async (req: Request, res: Response) => {
 
   if (name !== undefined) {
     if (typeof name !== "string" || !name.trim()) {
-      res.status(400).json({ success: false, message: "Team name cannot be empty" });
+      res
+        .status(400)
+        .json({ success: false, message: "Team name cannot be empty" });
       return;
     }
     data.name = name.trim();
@@ -178,7 +179,9 @@ export const updateTeam = async (req: Request, res: Response) => {
 
   if (status !== undefined) {
     if (status !== "ACTIVE" && status !== "INACTIVE") {
-      res.status(400).json({ success: false, message: "Status must be ACTIVE or INACTIVE" });
+      res
+        .status(400)
+        .json({ success: false, message: "Status must be ACTIVE or INACTIVE" });
       return;
     }
     data.status = status;
@@ -207,7 +210,6 @@ export const updateTeam = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
-
 
 export const setTeamLeader = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -241,7 +243,48 @@ export const setTeamLeader = async (req: Request, res: Response) => {
       if (!leader) {
         res.status(400).json({
           success: false,
-          message: "Team leader must be an active Team Leader of your organization",
+          message:
+            "Team leader must be an active Team Leader of your organization",
+        });
+        return;
+      }
+    }
+
+    const currentTeam = await prisma.team.findFirst({
+      where: { id, organizationId },
+      select: { teamLeaderId: true },
+    });
+
+    if (!currentTeam) {
+      res.status(404).json({ success: false, message: "Team not found" });
+      return;
+    }
+
+    const outgoingLeaderId = currentTeam.teamLeaderId;
+
+    if (outgoingLeaderId && outgoingLeaderId !== teamLeaderId) {
+      const affectedProjects = await prisma.project.findMany({
+        where: {
+          organizationId,
+          teamLeaderId: outgoingLeaderId,
+          teams: { some: { teamId: id } },
+          NOT: {
+            teams: {
+              some: {
+                team: { teamLeaderId: outgoingLeaderId, id: { not: id } },
+              },
+            },
+          },
+        },
+        select: { name: true },
+      });
+
+      if (affectedProjects.length > 0) {
+        res.status(409).json({
+          success: false,
+          message: `This Team Leader still leads these projects through this team: ${affectedProjects
+            .map((p) => p.name)
+            .join(", ")}. Change the project lead or linked teams first.`,
         });
         return;
       }
@@ -259,7 +302,9 @@ export const setTeamLeader = async (req: Request, res: Response) => {
 
     const team = await prisma.team.findUnique({
       where: { id },
-      include: { teamLeader: { select: { id: true, name: true, email: true } } },
+      include: {
+        teamLeader: { select: { id: true, name: true, email: true } },
+      },
     });
 
     res.status(200).json({ success: true, team });
@@ -299,7 +344,9 @@ export const removeMember = async (req: Request, res: Response) => {
       return;
     }
 
-    res.status(200).json({ success: true, message: "Member removed from team" });
+    res
+      .status(200)
+      .json({ success: true, message: "Member removed from team" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Something went wrong" });
