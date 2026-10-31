@@ -264,3 +264,203 @@ export const getTask = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+
+const LEAD_ONLY_FIELDS = ["title", "priority", "dueDate", "assignedToId"] as const;
+const EDITABLE_FIELDS = ["title", "description", "priority", "dueDate", "assignedToId"];
+
+export const updateTask = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const id = req.params.id as string;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  if ("status" in body) {
+    res.status(400).json({
+      success: false,
+      message: "The status is changed by moving the task, not by editing it",
+    });
+    return;
+  }
+
+  if (!EDITABLE_FIELDS.some((field) => field in body)) {
+    res.status(400).json({ success: false, message: "Nothing to update" });
+    return;
+  }
+
+  try {
+    const task = await prisma.task.findFirst({
+      where: { id, project: visibleWhere(req.user) },
+      include: { project: { select: { status: true, teamLeaderId: true } } },
+    });
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    const isLead = role === "TEAM_LEADER" && task.project.teamLeaderId === userId;
+    const isAssignee = role === "DEVELOPER" && task.assignedToId === userId;
+
+    if (!isLead && !isAssignee) {
+      res.status(403).json({ success: false, message: "You cannot edit this task" });
+      return;
+    }
+
+    if (task.project.status === "ARCHIVED") {
+      res.status(403).json({
+        success: false,
+        message: "Tasks of an archived project are read-only",
+      });
+      return;
+    }
+
+    if (!isLead) {
+      const forbidden = LEAD_ONLY_FIELDS.find((field) => field in body);
+
+      if (forbidden) {
+        res.status(403).json({
+          success: false,
+          message: `Only the project lead can change the ${forbidden}`,
+        });
+        return;
+      }
+    }
+
+    const data: Prisma.TaskUncheckedUpdateInput = {};
+    const changes: Record<string, Prisma.InputJsonValue> = {};
+
+    if ("title" in body) {
+      const title = typeof body.title === "string" ? body.title.trim() : "";
+
+      if (!title || title.length > 200) {
+        res.status(400).json({
+          success: false,
+          message: "Title is required and must be 200 characters or less",
+        });
+        return;
+      }
+
+      if (title !== task.title) {
+        data.title = title;
+        changes.title = { from: task.title, to: title };
+      }
+    }
+
+    if ("description" in body) {
+      if (body.description !== null && typeof body.description !== "string") {
+        res.status(400).json({ success: false, message: "Invalid description" });
+        return;
+      }
+
+      const description = body.description?.trim() || null;
+
+      if (description !== task.description) {
+        data.description = description;
+        changes.description = "edited";
+      }
+    }
+
+    if ("priority" in body) {
+      if (!PRIORITIES.includes(body.priority as (typeof PRIORITIES)[number])) {
+        res.status(400).json({
+          success: false,
+          message: "Priority must be LOW, MEDIUM or HIGH",
+        });
+        return;
+      }
+
+      const priority = body.priority as (typeof PRIORITIES)[number];
+
+      if (priority !== task.priority) {
+        data.priority = priority;
+        changes.priority = { from: task.priority, to: priority };
+      }
+    }
+
+    if ("dueDate" in body) {
+      let dueDate: Date | null = null;
+
+      if (hasValue(body.dueDate)) {
+        dueDate = typeof body.dueDate === "string" ? toDueDate(body.dueDate) : null;
+
+        if (!dueDate) {
+          res.status(400).json({ success: false, message: "Invalid due date" });
+          return;
+        }
+      }
+
+      if ((dueDate?.getTime() ?? null) !== (task.dueDate?.getTime() ?? null)) {
+        data.dueDate = dueDate;
+        changes.dueDate = {
+          from: task.dueDate?.toISOString() ?? null,
+          to: dueDate?.toISOString() ?? null,
+        };
+      }
+    }
+
+    if ("assignedToId" in body) {
+      if (hasValue(body.assignedToId) && typeof body.assignedToId !== "string") {
+        res.status(400).json({ success: false, message: "Invalid assignee" });
+        return;
+      }
+
+      const assignedToId = hasValue(body.assignedToId) ? (body.assignedToId as string) : null;
+
+      if (assignedToId !== task.assignedToId) {
+        if (assignedToId) {
+          const valid = await isValidAssignee(organizationId, task.projectId, assignedToId);
+
+          if (!valid) {
+            res.status(400).json({
+              success: false,
+              message: "The assignee must be a Developer of a team linked to this project",
+            });
+            return;
+          }
+        }
+
+        data.assignedToId = assignedToId;
+        changes.assignedToId = { from: task.assignedToId, to: assignedToId };
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      const current = await prisma.task.findUnique({ where: { id }, include: taskInclude });
+      res.status(200).json({
+        success: true,
+        message: "No changes",
+        task: current ? withOverdue(current) : null,
+      });
+      return;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.task.update({
+        where: { id },
+        data,
+        include: taskInclude,
+      });
+
+      await logActivity(tx, {
+        organizationId,
+        userId,
+        entityType: "TASK",
+        entityId: id,
+        action: "TASK_UPDATED",
+        details: { changes },
+      });
+
+      return result;
+    });
+
+    res.status(200).json({ success: true, task: withOverdue(updated) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
