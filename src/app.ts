@@ -8,7 +8,7 @@ import cookieParser from "cookie-parser";
 import teamsRoutes from "./modules/teams/teams.routes.js";
 import invitationRoutes from "./modules/invitations/invitations.routes.js";
 import projectRoutes from "./modules/projects/projects.routes.js";
-
+import taskRoutes from "./modules/tasks/tasks.routes.js";
 
 
 
@@ -25,7 +25,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/teams", teamsRoutes);
 app.use("/api/invitations", invitationRoutes);
 app.use("/api/projects", projectRoutes);
-
+app.use("/api", taskRoutes);
 
 app.get("/api/health", async (_req, res) => {
   await prisma.$queryRaw`SELECT 1`;

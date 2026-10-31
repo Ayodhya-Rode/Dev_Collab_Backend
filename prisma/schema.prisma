@@ -34,10 +34,13 @@ model Organization {
   createdAt   DateTime           @default(now()) @map("created_at")
   updatedAt   DateTime           @updatedAt @map("updated_at")
 
-  users       User[]
-  teams       Team[]
-  invitations Invitation[]
-  projects    Project[]
+  users        User[]
+  teams        Team[]
+  invitations  Invitation[]
+  projects     Project[]
+  tasks        Task[]
+  taskComments TaskComment[]
+  activityLogs ActivityLog[]
 
   @@map("organizations")
 }
@@ -61,6 +64,11 @@ model User {
   sentInvitations     Invitation[]
   ledProjects         Project[]            @relation("ProjectLead")
   createdProjects     Project[]            @relation("ProjectCreator")
+
+  assignedTasks Task[]        @relation("TaskAssignee")
+  createdTasks  Task[]        @relation("TaskCreator")
+  taskComments  TaskComment[]
+  activityLogs  ActivityLog[]
 
   @@index([organizationId])
   @@map("users")
@@ -184,10 +192,12 @@ model Project {
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
-  organization Organization  @relation(fields: [organizationId], references: [id])
-  teamLeader   User          @relation("ProjectLead", fields: [teamLeaderId], references: [id])
-  createdBy    User          @relation("ProjectCreator", fields: [createdById], references: [id])
-  teams        ProjectTeam[]
+  organization Organization @relation(fields: [organizationId], references: [id])
+  teamLeader   User         @relation("ProjectLead", fields: [teamLeaderId], references: [id])
+  createdBy    User         @relation("ProjectCreator", fields: [createdById], references: [id])
+
+  teams ProjectTeam[]
+  tasks Task[]
 
   @@index([organizationId])
   @@index([teamLeaderId])
@@ -206,4 +216,75 @@ model ProjectTeam {
   @@unique([projectId, teamId])
   @@index([teamId])
   @@map("project_teams")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  COMPLETED
+}
+
+model Task {
+  id             String     @id @default(uuid())
+  organizationId String     @map("organization_id")
+  projectId      String     @map("project_id")
+  title          String
+  description    String?    @db.Text
+  assignedToId   String?    @map("assigned_to")
+  createdById    String     @map("created_by")
+  status         TaskStatus @default(TODO)
+  priority       Priority   @default(MEDIUM)
+  position       Int        @default(0)
+  dueDate        DateTime?  @map("due_date")
+  completedAt    DateTime?  @map("completed_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  project      Project       @relation(fields: [projectId], references: [id])
+  assignedTo   User?         @relation("TaskAssignee", fields: [assignedToId], references: [id])
+  createdBy    User          @relation("TaskCreator", fields: [createdById], references: [id])
+  comments     TaskComment[]
+
+  @@index([organizationId])
+  @@index([projectId, status])
+  @@index([assignedToId])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  taskId         String   @map("task_id")
+  userId         String   @map("user_id")
+  comment        String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model ActivityLog {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  entityType     String   @map("entity_type")
+  entityId       String   @map("entity_id")
+  action         String
+  details        Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("activity_logs")
 }

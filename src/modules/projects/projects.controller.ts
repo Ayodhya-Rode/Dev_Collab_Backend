@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { prisma } from "../../lib/prisma.js";
 import type { Priority,Prisma, ProjectStatus } from "../../generated/prisma/client.js";
+import { visibleWhere } from "./project.access.js";
+
 
 const PRIORITIES: Priority[] = ["LOW", "MEDIUM", "HIGH"];
 
@@ -17,7 +19,6 @@ const projectInclude = {
   teams: { select: { team: { select: { id: true, name: true } } } },
 } as const;
 
-type AuthUser = NonNullable<Request["user"]>;
 
 const STATUSES: ProjectStatus[] = [
   "PLANNING",
@@ -27,26 +28,6 @@ const STATUSES: ProjectStatus[] = [
   "ARCHIVED",
 ];
 
-const visibleWhere = ({ userId, role, organizationId }: AuthUser): Prisma.ProjectWhereInput => {
-  if (role === "ADMIN") return { organizationId };
-
-  if (role === "TEAM_LEADER") {
-    return {
-      organizationId,
-      OR: [
-        { teamLeaderId: userId },
-        { teams: { some: { team: { teamLeaderId: userId } } } },
-      ],
-    };
-  }
-
-  return {
-    organizationId,
-    teams: {
-      some: { team: { members: { some: { userId, status: "ACTIVE" } } } },
-    },
-  };
-};
 
 const checkLeadAndTeams = async (
   organizationId: string,
