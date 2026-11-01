@@ -626,3 +626,212 @@ export const moveTask = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+export const deleteTask = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, organizationId } = req.user;
+  const id = req.params.id as string;
+
+  try {
+    const task = await prisma.task.findFirst({
+      where: { id, project: visibleWhere(req.user) },
+      include: { project: { select: { status: true, teamLeaderId: true } } },
+    });
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    if (task.project.teamLeaderId !== userId) {
+      res.status(403).json({
+        success: false,
+        message: "Only the project lead can delete tasks",
+      });
+      return;
+    }
+
+    if (task.project.status === "ARCHIVED") {
+      res.status(403).json({
+        success: false,
+        message: "Tasks of an archived project are read-only",
+      });
+      return;
+    }
+
+    const { projectId, status, title } = task;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE`;
+
+      // The comments are removed with the task (onDelete: Cascade)
+      await tx.task.delete({ where: { id } });
+
+      const column = await tx.task.findMany({
+        where: { projectId, status },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: { id: true, position: true },
+      });
+
+      for (const [i, t] of column.entries()) {
+        if (t.position !== i + 1) {
+          await tx.task.update({ where: { id: t.id }, data: { position: i + 1 } });
+        }
+      }
+
+      // The log keeps the title, because the task itself is gone
+      await logActivity(tx, {
+        organizationId,
+        userId,
+        entityType: "TASK",
+        entityId: id,
+        action: "TASK_DELETED",
+        details: { title, status, projectId },
+      });
+    });
+
+    res.status(200).json({ success: true, message: "Task deleted" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+const findVisibleTask = (req: Request, id: string) =>
+  prisma.task.findFirst({
+    where: { id, project: visibleWhere(req.user!) },
+    include: { project: { select: { status: true } } },
+  });
+
+const commentAuthor = { select: { id: true, name: true, role: true } } as const;
+
+export const addComment = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, organizationId } = req.user;
+  const id = req.params.id as string;
+  const text = typeof req.body?.comment === "string" ? req.body.comment.trim() : "";
+
+  if (!text) {
+    res.status(400).json({ success: false, message: "Comment cannot be empty" });
+    return;
+  }
+
+  if (text.length > 2000) {
+    res.status(400).json({
+      success: false,
+      message: "Comment must be 2000 characters or less",
+    });
+    return;
+  }
+
+  try {
+    const task = await findVisibleTask(req, id);
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    if (task.project.status === "ARCHIVED") {
+      res.status(403).json({
+        success: false,
+        message: "Tasks of an archived project are read-only",
+      });
+      return;
+    }
+
+    const comment = await prisma.$transaction(async (tx) => {
+      const created = await tx.taskComment.create({
+        data: { organizationId, taskId: id, userId, comment: text },
+        include: { user: commentAuthor },
+      });
+
+      await logActivity(tx, {
+        organizationId,
+        userId,
+        entityType: "TASK",
+        entityId: id,
+        action: "COMMENT_ADDED",
+        details: { commentId: created.id },
+      });
+
+      return created;
+    });
+
+    res.status(201).json({ success: true, comment });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+export const listComments = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const id = req.params.id as string;
+
+  try {
+    const task = await findVisibleTask(req, id);
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    const comments = await prisma.taskComment.findMany({
+      where: { taskId: id },
+      include: { user: commentAuthor },
+      orderBy: { createdAt: "asc" },
+    });
+
+    res.status(200).json({ success: true, comments });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+export const getTaskActivity = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const id = req.params.id as string;
+
+  try {
+    const task = await findVisibleTask(req, id);
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    const activity = await prisma.activityLog.findMany({
+      where: {
+        organizationId: req.user.organizationId,
+        entityType: "TASK",
+        entityId: id,
+      },
+      include: { user: commentAuthor },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+
+    res.status(200).json({ success: true, activity });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
