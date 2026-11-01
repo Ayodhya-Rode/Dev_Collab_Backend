@@ -522,8 +522,7 @@ export const moveTask = async (req: Request, res: Response) => {
 
     const result = await prisma.$transaction(async (tx) => {
       // One move at a time per project, so positions never clash
-      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE`;
-
+      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId} FOR UPDATE`;
       const current = await tx.task.findUnique({
         where: { id },
         select: { status: true, completedAt: true },
@@ -666,7 +665,7 @@ export const deleteTask = async (req: Request, res: Response) => {
     const { projectId, status, title } = task;
 
     await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId} FOR UPDATE`;
 
       // The comments are removed with the task (onDelete: Cascade)
       await tx.task.delete({ where: { id } });
