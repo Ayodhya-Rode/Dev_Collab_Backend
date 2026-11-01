@@ -464,3 +464,165 @@ export const updateTask = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+export const moveTask = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { userId, role, organizationId } = req.user;
+  const id = req.params.id as string;
+  const { status, position } = req.body;
+
+  if (!TASK_STATUSES.includes(status)) {
+    res.status(400).json({
+      success: false,
+      message: "Status must be TODO, IN_PROGRESS, IN_REVIEW or COMPLETED",
+    });
+    return;
+  }
+
+  if (!Number.isInteger(position) || position < 0) {
+    res.status(400).json({
+      success: false,
+      message: "Position must be a whole number, 0 or more",
+    });
+    return;
+  }
+
+  try {
+    const task = await prisma.task.findFirst({
+      where: { id, project: visibleWhere(req.user) },
+      include: { project: { select: { status: true, teamLeaderId: true } } },
+    });
+
+    if (!task) {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    const isLead = role === "TEAM_LEADER" && task.project.teamLeaderId === userId;
+    const isAssignee = role === "DEVELOPER" && task.assignedToId === userId;
+
+    if (!isLead && !isAssignee) {
+      res.status(403).json({ success: false, message: "You cannot move this task" });
+      return;
+    }
+
+    if (task.project.status === "ARCHIVED") {
+      res.status(403).json({
+        success: false,
+        message: "Tasks of an archived project are read-only",
+      });
+      return;
+    }
+
+    const projectId = task.projectId;
+
+    const result = await prisma.$transaction(async (tx) => {
+      // One move at a time per project, so positions never clash
+      await tx.$queryRaw`SELECT id FROM projects WHERE id = ${projectId}::uuid FOR UPDATE`;
+
+      const current = await tx.task.findUnique({
+        where: { id },
+        select: { status: true, completedAt: true },
+      });
+
+      if (!current) throw new Error("TASK_GONE");
+
+      const column = await tx.task.findMany({
+        where: { projectId, status },
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        select: { id: true, position: true },
+      });
+
+      const oldIndex = column.findIndex((t) => t.id === id);
+      const others = column.filter((t) => t.id !== id);
+      const index = Math.min(position, others.length);
+
+      if (current.status === status && oldIndex === index) {
+        const same = await tx.task.findUniqueOrThrow({
+          where: { id },
+          include: taskInclude,
+        });
+        return { changed: false, task: same };
+      }
+
+      // Put the task into its new place and number the column 1, 2, 3...
+      const ordered = others.map((t) => t.id);
+      ordered.splice(index, 0, id);
+
+      for (const [i, taskId] of ordered.entries()) {
+        const newPosition = i + 1;
+        const existing = column.find((t) => t.id === taskId);
+
+        if (taskId === id) continue;
+        if (existing && existing.position === newPosition) continue;
+
+        await tx.task.update({ where: { id: taskId }, data: { position: newPosition } });
+      }
+
+      const completedAt =
+        status === "COMPLETED"
+          ? current.status === "COMPLETED"
+            ? current.completedAt
+            : new Date()
+          : null;
+
+      await tx.task.update({
+        where: { id },
+        data: { status, position: index + 1, completedAt },
+      });
+
+      // Close the gap in the column the task left
+      if (current.status !== status) {
+        const oldColumn = await tx.task.findMany({
+          where: { projectId, status: current.status, NOT: { id } },
+          orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+          select: { id: true, position: true },
+        });
+
+        for (const [i, t] of oldColumn.entries()) {
+          if (t.position !== i + 1) {
+            await tx.task.update({ where: { id: t.id }, data: { position: i + 1 } });
+          }
+        }
+      }
+
+      const statusChanged = current.status !== status;
+
+      await logActivity(tx, {
+        organizationId,
+        userId,
+        entityType: "TASK",
+        entityId: id,
+        action: statusChanged ? "TASK_STATUS_CHANGED" : "TASK_REORDERED",
+        details: statusChanged
+          ? { from: current.status, to: status, position: index + 1 }
+          : { status, from: oldIndex + 1, to: index + 1 },
+      });
+
+      const moved = await tx.task.findUniqueOrThrow({
+        where: { id },
+        include: taskInclude,
+      });
+
+      return { changed: true, task: moved };
+    });
+
+    res.status(200).json({
+      success: true,
+      changed: result.changed,
+      task: withOverdue(result.task),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "TASK_GONE") {
+      res.status(404).json({ success: false, message: "Task not found" });
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createTask, getTask, listTasks, updateTask } from "./tasks.controller.js";
+import { createTask, getTask, listTasks, updateTask , moveTask} from "./tasks.controller.js";
 import { authenticate } from "../../middleware/auth.middleware.js";
 import { requireRole } from "../../middleware/role.middleware.js";
 
@@ -10,5 +10,5 @@ router.post("/projects/:projectId/tasks", authenticate, requireRole("TEAM_LEADER
 router.get("/projects/:projectId/tasks", authenticate, listTasks);
 router.get("/tasks/:id", authenticate, getTask);
 router.patch("/tasks/:id", authenticate, requireRole("TEAM_LEADER", "DEVELOPER"), updateTask);
-
+router.patch("/tasks/:id/move", authenticate, requireRole("TEAM_LEADER", "DEVELOPER"), moveTask);
 export default router;
