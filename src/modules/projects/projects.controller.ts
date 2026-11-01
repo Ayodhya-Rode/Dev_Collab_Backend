@@ -582,3 +582,63 @@ export const setProjectTeams = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+export const listAssignees = async (req: Request, res: Response) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const { organizationId } = req.user;
+  const id = req.params.id as string;
+
+  try {
+    const project = await prisma.project.findFirst({
+      where: { id, ...visibleWhere(req.user) },
+      select: { id: true },
+    });
+
+    if (!project) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    const members = await prisma.teamMember.findMany({
+      where: {
+        status: "ACTIVE",
+        user: { organizationId, role: "DEVELOPER", status: "ACTIVE" },
+        team: {
+          organizationId,
+          status: "ACTIVE",
+          projects: { some: { projectId: id } },
+        },
+      },
+      select: {
+        user: { select: { id: true, name: true, email: true } },
+        team: { select: { name: true } },
+      },
+      orderBy: { user: { name: "asc" } },
+    });
+
+    // A Developer in several linked teams is listed once
+    const assignees = new Map<
+      string,
+      { id: string; name: string; email: string; teams: string[] }
+    >();
+
+    for (const m of members) {
+      const existing = assignees.get(m.user.id);
+
+      if (existing) {
+        existing.teams.push(m.team.name);
+      } else {
+        assignees.set(m.user.id, { ...m.user, teams: [m.team.name] });
+      }
+    }
+
+    res.status(200).json({ success: true, assignees: [...assignees.values()] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
