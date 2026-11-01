@@ -1,8 +1,12 @@
 import type { Request, Response } from "express";
 import { prisma } from "../../lib/prisma.js";
-import type { Priority,Prisma, ProjectStatus } from "../../generated/prisma/client.js";
+import type {
+  Priority,
+  Prisma,
+  ProjectStatus,
+} from "../../generated/prisma/client.js";
 import { visibleWhere } from "./project.access.js";
-
+import { getProjectStats } from "./project.stats.js";
 
 const PRIORITIES: Priority[] = ["LOW", "MEDIUM", "HIGH"];
 
@@ -19,7 +23,6 @@ const projectInclude = {
   teams: { select: { team: { select: { id: true, name: true } } } },
 } as const;
 
-
 const STATUSES: ProjectStatus[] = [
   "PLANNING",
   "ACTIVE",
@@ -27,7 +30,6 @@ const STATUSES: ProjectStatus[] = [
   "COMPLETED",
   "ARCHIVED",
 ];
-
 
 const checkLeadAndTeams = async (
   organizationId: string,
@@ -39,23 +41,28 @@ const checkLeadAndTeams = async (
     select: { id: true, teamLeaderId: true },
   });
 
-  if (teams.length !== teamIds.length) return "One or more teams were not found";
+  if (teams.length !== teamIds.length)
+    return "One or more teams were not found";
 
   const leader = await prisma.user.findFirst({
-    where: { id: leaderId, organizationId, role: "TEAM_LEADER", status: "ACTIVE" },
+    where: {
+      id: leaderId,
+      organizationId,
+      role: "TEAM_LEADER",
+      status: "ACTIVE",
+    },
   });
 
-  if (!leader) return "Project lead must be an active Team Leader of your organization";
+  if (!leader)
+    return "Project lead must be an active Team Leader of your organization";
 
   if (!teams.some((t) => t.teamLeaderId === leader.id)) {
     return "The project lead must be the Team Leader of one of the linked teams";
   }
 
   return null;
-};8
-
-
-
+};
+8;
 
 export const createProject = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -64,11 +71,20 @@ export const createProject = async (req: Request, res: Response) => {
   }
 
   const { userId, role, organizationId } = req.user;
-  const { name, description, priority, startDate, dueDate, teamIds, teamLeaderId } =
-    req.body;
+  const {
+    name,
+    description,
+    priority,
+    startDate,
+    dueDate,
+    teamIds,
+    teamLeaderId,
+  } = req.body;
 
   if (typeof name !== "string" || !name.trim()) {
-    res.status(400).json({ success: false, message: "Project name is required" });
+    res
+      .status(400)
+      .json({ success: false, message: "Project name is required" });
     return;
   }
 
@@ -77,39 +93,61 @@ export const createProject = async (req: Request, res: Response) => {
     teamIds.length === 0 ||
     !teamIds.every((id) => typeof id === "string")
   ) {
-    res.status(400).json({ success: false, message: "Select at least one team" });
+    res
+      .status(400)
+      .json({ success: false, message: "Select at least one team" });
     return;
   }
 
-  if (description !== undefined && description !== null && typeof description !== "string") {
+  if (
+    description !== undefined &&
+    description !== null &&
+    typeof description !== "string"
+  ) {
     res.status(400).json({ success: false, message: "Invalid description" });
     return;
   }
 
   if (priority !== undefined && !PRIORITIES.includes(priority)) {
-    res.status(400).json({ success: false, message: "Priority must be LOW, MEDIUM or HIGH" });
+    res.status(400).json({
+      success: false,
+      message: "Priority must be LOW, MEDIUM or HIGH",
+    });
     return;
   }
 
   if (hasValue(startDate) && !isDateString(startDate)) {
-    res.status(400).json({ success: false, message: "Start date must be YYYY-MM-DD" });
+    res
+      .status(400)
+      .json({ success: false, message: "Start date must be YYYY-MM-DD" });
     return;
   }
 
   if (hasValue(dueDate) && !isDateString(dueDate)) {
-    res.status(400).json({ success: false, message: "Due date must be YYYY-MM-DD" });
+    res
+      .status(400)
+      .json({ success: false, message: "Due date must be YYYY-MM-DD" });
     return;
   }
 
-  if (hasValue(startDate) && hasValue(dueDate) && new Date(dueDate) < new Date(startDate)) {
-    res.status(400).json({ success: false, message: "Due date cannot be before the start date" });
+  if (
+    hasValue(startDate) &&
+    hasValue(dueDate) &&
+    new Date(dueDate) < new Date(startDate)
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "Due date cannot be before the start date",
+    });
     return;
   }
 
   const leaderId = role === "ADMIN" ? teamLeaderId : userId;
 
   if (typeof leaderId !== "string") {
-    res.status(400).json({ success: false, message: "Project lead is required" });
+    res
+      .status(400)
+      .json({ success: false, message: "Project lead is required" });
     return;
   }
 
@@ -122,18 +160,26 @@ export const createProject = async (req: Request, res: Response) => {
     });
 
     if (teams.length !== uniqueTeamIds.length) {
-      res.status(400).json({ success: false, message: "One or more teams were not found" });
+      res
+        .status(400)
+        .json({ success: false, message: "One or more teams were not found" });
       return;
     }
 
     const leader = await prisma.user.findFirst({
-      where: { id: leaderId, organizationId, role: "TEAM_LEADER", status: "ACTIVE" },
+      where: {
+        id: leaderId,
+        organizationId,
+        role: "TEAM_LEADER",
+        status: "ACTIVE",
+      },
     });
 
     if (!leader) {
       res.status(400).json({
         success: false,
-        message: "Project lead must be an active Team Leader of your organization",
+        message:
+          "Project lead must be an active Team Leader of your organization",
       });
       return;
     }
@@ -141,7 +187,8 @@ export const createProject = async (req: Request, res: Response) => {
     if (!teams.some((t) => t.teamLeaderId === leader.id)) {
       res.status(400).json({
         success: false,
-        message: "The project lead must be the Team Leader of one of the linked teams",
+        message:
+          "The project lead must be the Team Leader of one of the linked teams",
       });
       return;
     }
@@ -181,13 +228,17 @@ export const listProjects = async (req: Request, res: Response) => {
       orderBy: { createdAt: "desc" },
     });
 
-    res.status(200).json({ success: true, projects });
+    const stats = await getProjectStats(projects.map((p) => p.id));
+
+    res.status(200).json({
+      success: true,
+      projects: projects.map((p) => ({ ...p, stats: stats.get(p.id) })),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
-
 
 export const getProject = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -225,14 +276,18 @@ export const getProject = async (req: Request, res: Response) => {
 
     const canManage =
       req.user.role === "ADMIN" || project.teamLeaderId === req.user.userId;
+    const stats = (await getProjectStats([project.id])).get(project.id);
 
-    res.status(200).json({ success: true, project, canManage });
+    res.status(200).json({
+      success: true,
+      project: { ...project, stats },
+      canManage,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
-
 
 export const updateProject = async (req: Request, res: Response) => {
   if (!req.user) {
@@ -248,7 +303,9 @@ export const updateProject = async (req: Request, res: Response) => {
 
   if (name !== undefined) {
     if (typeof name !== "string" || !name.trim()) {
-      res.status(400).json({ success: false, message: "Project name cannot be empty" });
+      res
+        .status(400)
+        .json({ success: false, message: "Project name cannot be empty" });
       return;
     }
     data.name = name.trim();
@@ -266,12 +323,16 @@ export const updateProject = async (req: Request, res: Response) => {
     if (!STATUSES.includes(status)) {
       res.status(400).json({
         success: false,
-        message: "Status must be PLANNING, ACTIVE, ON_HOLD, COMPLETED or ARCHIVED",
+        message:
+          "Status must be PLANNING, ACTIVE, ON_HOLD, COMPLETED or ARCHIVED",
       });
       return;
     }
     if (status === "ARCHIVED" && role !== "ADMIN") {
-      res.status(403).json({ success: false, message: "Only an Admin can archive a project" });
+      res.status(403).json({
+        success: false,
+        message: "Only an Admin can archive a project",
+      });
       return;
     }
     data.status = status;
@@ -279,7 +340,10 @@ export const updateProject = async (req: Request, res: Response) => {
 
   if (priority !== undefined) {
     if (!PRIORITIES.includes(priority)) {
-      res.status(400).json({ success: false, message: "Priority must be LOW, MEDIUM or HIGH" });
+      res.status(400).json({
+        success: false,
+        message: "Priority must be LOW, MEDIUM or HIGH",
+      });
       return;
     }
     data.priority = priority;
@@ -291,7 +355,9 @@ export const updateProject = async (req: Request, res: Response) => {
     } else if (isDateString(startDate)) {
       data.startDate = new Date(startDate);
     } else {
-      res.status(400).json({ success: false, message: "Start date must be YYYY-MM-DD" });
+      res
+        .status(400)
+        .json({ success: false, message: "Start date must be YYYY-MM-DD" });
       return;
     }
   }
@@ -302,7 +368,9 @@ export const updateProject = async (req: Request, res: Response) => {
     } else if (isDateString(dueDate)) {
       data.dueDate = new Date(dueDate);
     } else {
-      res.status(400).json({ success: false, message: "Due date must be YYYY-MM-DD" });
+      res
+        .status(400)
+        .json({ success: false, message: "Due date must be YYYY-MM-DD" });
       return;
     }
   }
@@ -313,7 +381,9 @@ export const updateProject = async (req: Request, res: Response) => {
   }
 
   try {
-    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+    const project = await prisma.project.findFirst({
+      where: { id, organizationId },
+    });
 
     if (!project || (role !== "ADMIN" && project.teamLeaderId !== userId)) {
       res.status(404).json({ success: false, message: "Project not found" });
@@ -329,9 +399,13 @@ export const updateProject = async (req: Request, res: Response) => {
     }
 
     const effectiveStart =
-      data.startDate !== undefined ? (data.startDate as Date | null) : project.startDate;
+      data.startDate !== undefined
+        ? (data.startDate as Date | null)
+        : project.startDate;
     const effectiveDue =
-      data.dueDate !== undefined ? (data.dueDate as Date | null) : project.dueDate;
+      data.dueDate !== undefined
+        ? (data.dueDate as Date | null)
+        : project.dueDate;
 
     if (effectiveStart && effectiveDue && effectiveDue < effectiveStart) {
       res.status(400).json({
@@ -354,7 +428,6 @@ export const updateProject = async (req: Request, res: Response) => {
   }
 };
 
-
 export const setProjectLeader = async (req: Request, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, message: "Not authenticated" });
@@ -366,12 +439,16 @@ export const setProjectLeader = async (req: Request, res: Response) => {
   const { teamLeaderId } = req.body;
 
   if (typeof teamLeaderId !== "string" || !teamLeaderId) {
-    res.status(400).json({ success: false, message: "teamLeaderId is required" });
+    res
+      .status(400)
+      .json({ success: false, message: "teamLeaderId is required" });
     return;
   }
 
   try {
-    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+    const project = await prisma.project.findFirst({
+      where: { id, organizationId },
+    });
 
     if (!project) {
       res.status(404).json({ success: false, message: "Project not found" });
@@ -379,13 +456,19 @@ export const setProjectLeader = async (req: Request, res: Response) => {
     }
 
     const leader = await prisma.user.findFirst({
-      where: { id: teamLeaderId, organizationId, role: "TEAM_LEADER", status: "ACTIVE" },
+      where: {
+        id: teamLeaderId,
+        organizationId,
+        role: "TEAM_LEADER",
+        status: "ACTIVE",
+      },
     });
 
     if (!leader) {
       res.status(400).json({
         success: false,
-        message: "Project lead must be an active Team Leader of your organization",
+        message:
+          "Project lead must be an active Team Leader of your organization",
       });
       return;
     }
@@ -397,7 +480,8 @@ export const setProjectLeader = async (req: Request, res: Response) => {
     if (!leadsLinkedTeam) {
       res.status(400).json({
         success: false,
-        message: "The project lead must be the Team Leader of one of the linked teams",
+        message:
+          "The project lead must be the Team Leader of one of the linked teams",
       });
       return;
     }
@@ -415,7 +499,6 @@ export const setProjectLeader = async (req: Request, res: Response) => {
   }
 };
 
-
 export const setProjectTeams = async (req: Request, res: Response) => {
   if (!req.user) {
     res.status(401).json({ success: false, message: "Not authenticated" });
@@ -431,14 +514,18 @@ export const setProjectTeams = async (req: Request, res: Response) => {
     teamIds.length === 0 ||
     !teamIds.every((t) => typeof t === "string")
   ) {
-    res.status(400).json({ success: false, message: "Select at least one team" });
+    res
+      .status(400)
+      .json({ success: false, message: "Select at least one team" });
     return;
   }
 
   const uniqueTeamIds = [...new Set(teamIds as string[])];
 
   try {
-    const project = await prisma.project.findFirst({ where: { id, organizationId } });
+    const project = await prisma.project.findFirst({
+      where: { id, organizationId },
+    });
 
     if (!project || (role !== "ADMIN" && project.teamLeaderId !== userId)) {
       res.status(404).json({ success: false, message: "Project not found" });
@@ -459,7 +546,11 @@ export const setProjectTeams = async (req: Request, res: Response) => {
         ? teamLeaderId
         : project.teamLeaderId;
 
-    const problem = await checkLeadAndTeams(organizationId, leaderId, uniqueTeamIds);
+    const problem = await checkLeadAndTeams(
+      organizationId,
+      leaderId,
+      uniqueTeamIds,
+    );
 
     if (problem) {
       res.status(400).json({ success: false, message: problem });
@@ -474,7 +565,10 @@ export const setProjectTeams = async (req: Request, res: Response) => {
         data: uniqueTeamIds.map((teamId) => ({ projectId: id, teamId })),
         skipDuplicates: true,
       }),
-      prisma.project.update({ where: { id }, data: { teamLeaderId: leaderId } }),
+      prisma.project.update({
+        where: { id },
+        data: { teamLeaderId: leaderId },
+      }),
     ]);
 
     const updated = await prisma.project.findUnique({
