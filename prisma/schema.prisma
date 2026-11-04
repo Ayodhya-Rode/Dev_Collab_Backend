@@ -34,13 +34,15 @@ model Organization {
   createdAt   DateTime           @default(now()) @map("created_at")
   updatedAt   DateTime           @updatedAt @map("updated_at")
 
-  users        User[]
-  teams        Team[]
-  invitations  Invitation[]
-  projects     Project[]
-  tasks        Task[]
-  taskComments TaskComment[]
-  activityLogs ActivityLog[]
+  users             User[]
+  teams             Team[]
+  invitations       Invitation[]
+  projects          Project[]
+  tasks             Task[]
+  taskComments      TaskComment[]
+  activityLogs      ActivityLog[]
+  githubConnections GithubConnection[]
+  taskPrLinks       TaskPrLink[]
 
   @@map("organizations")
 }
@@ -65,10 +67,12 @@ model User {
   ledProjects         Project[]            @relation("ProjectLead")
   createdProjects     Project[]            @relation("ProjectCreator")
 
-  assignedTasks Task[]        @relation("TaskAssignee")
-  createdTasks  Task[]        @relation("TaskCreator")
-  taskComments  TaskComment[]
-  activityLogs  ActivityLog[]
+  assignedTasks      Task[]             @relation("TaskAssignee")
+  createdTasks       Task[]             @relation("TaskCreator")
+  taskComments       TaskComment[]
+  activityLogs       ActivityLog[]
+  githubConnections  GithubConnection[]
+  linkedPullRequests TaskPrLink[]
 
   @@index([organizationId])
   @@map("users")
@@ -196,8 +200,9 @@ model Project {
   teamLeader   User         @relation("ProjectLead", fields: [teamLeaderId], references: [id])
   createdBy    User         @relation("ProjectCreator", fields: [createdById], references: [id])
 
-  teams ProjectTeam[]
-  tasks Task[]
+  teams            ProjectTeam[]
+  tasks            Task[]
+  githubConnection GithubConnection?
 
   @@index([organizationId])
   @@index([teamLeaderId])
@@ -246,6 +251,7 @@ model Task {
   assignedTo   User?         @relation("TaskAssignee", fields: [assignedToId], references: [id])
   createdBy    User          @relation("TaskCreator", fields: [createdById], references: [id])
   comments     TaskComment[]
+  prLinks      TaskPrLink[]
 
   @@index([organizationId])
   @@index([projectId, status])
@@ -287,4 +293,41 @@ model ActivityLog {
   @@index([organizationId, createdAt])
   @@index([entityType, entityId])
   @@map("activity_logs")
+}
+
+model GithubConnection {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  projectId      String   @unique @map("project_id")
+  repoOwner      String   @map("repo_owner")
+  repoName       String   @map("repo_name")
+  defaultBranch  String   @map("default_branch")
+  connectedById  String   @map("connected_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  project      Project      @relation(fields: [projectId], references: [id])
+  connectedBy  User         @relation(fields: [connectedById], references: [id])
+
+  @@index([organizationId])
+  @@map("github_connections")
+}
+
+model TaskPrLink {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  taskId         String   @map("task_id")
+  prNumber       Int      @map("pr_number")
+  prUrl          String   @map("pr_url")
+  linkedById     String   @map("linked_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  linkedBy     User         @relation(fields: [linkedById], references: [id])
+
+  @@unique([taskId, prNumber])
+  @@index([organizationId])
+  @@map("task_pr_links")
 }
