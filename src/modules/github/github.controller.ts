@@ -3,10 +3,13 @@ import { prisma } from "../../lib/prisma.js";
 import { logActivity } from "../../lib/activity.js";
 import {
   GithubError,
+  fetchCommits,
+  fetchPullRequests,
   getRepository,
   parseRepository,
   sendGithubError,
 } from "../../lib/github.js";
+import { cached } from "../../lib/githubCache.js";
 import { visibleWhere } from "../projects/project.access.js";
 
 type AuthUser = NonNullable<Request["user"]>;
@@ -227,3 +230,75 @@ export const disconnectRepository = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: "Something went wrong" });
   }
 };
+
+interface RepoRef {
+  repoOwner: string;
+  repoName: string;
+  defaultBranch: string;
+}
+
+const respondWithRepoData = async <T>(
+  req: Request,
+  res: Response,
+  field: "commits" | "pullRequests",
+  fetcher: (repo: RepoRef) => Promise<T>,
+) => {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: "Not authenticated" });
+    return;
+  }
+
+  const id = req.params.id as string;
+
+  try {
+    const project = await findProject(req.user, id);
+
+    if (!project) {
+      res.status(404).json({ success: false, message: "Project not found" });
+      return;
+    }
+
+    const connection = await prisma.githubConnection.findUnique({
+      where: { projectId: id },
+    });
+
+    if (!connection) {
+      res.status(404).json({
+        success: false,
+        code: "NO_REPOSITORY",
+        message: "No repository is connected to this project",
+      });
+      return;
+    }
+
+    const key = `${field}:${connection.repoOwner}/${connection.repoName}@${connection.defaultBranch}`;
+    const result = await cached(key, () => fetcher(connection));
+
+    res.status(200).json({
+      success: true,
+      repository: `${connection.repoOwner}/${connection.repoName}`,
+      [field]: result.data,
+      fetchedAt: result.fetchedAt,
+      stale: result.stale,
+      warning: result.warning,
+    });
+  } catch (err) {
+    if (err instanceof GithubError) {
+      sendGithubError(res, err);
+      return;
+    }
+
+    console.error(err);
+    res.status(500).json({ success: false, message: "Something went wrong" });
+  }
+};
+
+export const getCommits = (req: Request, res: Response) =>
+  respondWithRepoData(req, res, "commits", (c) =>
+    fetchCommits(c.repoOwner, c.repoName, c.defaultBranch),
+  );
+
+export const getPullRequests = (req: Request, res: Response) =>
+  respondWithRepoData(req, res, "pullRequests", (c) =>
+    fetchPullRequests(c.repoOwner, c.repoName),
+  );
