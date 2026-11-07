@@ -10,7 +10,7 @@ import invitationRoutes from "./modules/invitations/invitations.routes.js";
 import projectRoutes from "./modules/projects/projects.routes.js";
 import taskRoutes from "./modules/tasks/tasks.routes.js";
 import githubRoutes from "./modules/github/github.routes.js";
-
+import dashboardRoutes from "./modules/dashboard/dashboard.routes.js";
 
 
 
@@ -27,6 +27,8 @@ app.use("/api/invitations", invitationRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api", taskRoutes);
 app.use("/api", githubRoutes);
+app.use("/api", dashboardRoutes);
+
 
 app.get("/api/health", async (_req, res) => {
   await prisma.$queryRaw`SELECT 1`;
